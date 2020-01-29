@@ -24,54 +24,75 @@
 #include <linux/vmalloc.h>
 #include <asm/byteorder.h>
 
-#include "../include/hmac_gen_ioctl.h"
 #include "../include/hmac_gen.h"
 
-static hmacgen_out_data *hmacgen_data;
-static int hmacgen_data_size = sizeof(*hmacgen_data);
 static struct class*  hmac_gen_class  = NULL;
 static struct device* hmac_gen_device = NULL;
 static int major_num;
 DEFINE_MUTEX(hmac_ioctl_lock);
 
-static int dev_open(struct inode *inod, struct file *fil)
+
+static int dev_open(struct inode *inod, struct file *filep)
 {
-        printk(KERN_INFO "%s device opened", DEVICE_NAME);
-        return 0;
+	crypto_vector_t *crypto_data = NULL;
+
+	if (!hmac_gen_device) {
+		printk(KERN_ERR "HMACGEN device is NULL\n");
+		return -EINVAL;
+	}
+
+	filep->private_data = (crypto_vector_t *)devm_kzalloc(hmac_gen_device, sizeof (*crypto_data), GFP_KERNEL);
+
+	if (!filep->private_data) {
+		printk(KERN_ERR "Failed to allocate memory for crypto data\n");
+		return -ENOMEM;
+	}
+	printk(KERN_INFO "%s device opened", DEVICE_NAME);
+	return 0;
 }
 
-static ssize_t dev_read(struct file *filep,char *buf,size_t len,loff_t *off)
+static ssize_t dev_read(struct file *filep, char *buf, size_t len, loff_t *off)
 {
 	int ret = -EINVAL;
 
-	printk(KERN_INFO "Read device %s called", DEVICE_NAME);
-	if (!filep || !buf || !off) {
-		printk(KERN_ERR "Read device called with null buffer or file pointers!!\n");
+	if (!filep || !filep->private_data || !buf || !off) {
+		printk(KERN_ERR "Read device called with null buffer or null file pointers!!\n");
 		return ret;
 	}
-	ret = hmac_gen_hash(hmacgen_data);
+	printk(KERN_INFO "Read device %s called", DEVICE_NAME);
+	crypto_vector_t *crypto_data = (crypto_vector_t *)filep->private_data;
+	ret = hmac_gen_hash(filep->private_data);
 	if (ret) {
 		printk(KERN_ERR "Failed to generate hmac sha with error %d\n", ret);
 		return ret;
 	}
-	if (copy_to_user(buf, hmacgen_data->hash_output, hmacgen_data->olen)) {
+	if (len < crypto_data->olen) {
+		printk(KERN_ERR "Read buffer size is smaller than the required size\n");
+		return -EINVAL;
+	}
+	if (copy_to_user(buf, crypto_data->hash_output, crypto_data->olen)) {
 		printk(KERN_ERR "Failed to copy the hash output to user\n");
 		return -EFAULT;
 	}
-        return ret;
+	return ret;
 }
 
-static ssize_t dev_write(struct file *flip,const char *buf,size_t len,loff_t *off)
+static ssize_t dev_write(struct file *filep, const char *buf, size_t len, loff_t *off)
 {
-        return -EINVAL;
+	return -EINVAL;
 }
 
-static int dev_release(struct inode *inod,struct file *fil){
-        printk(KERN_INFO "KERN_ALERT device closed\n");
-        return 0;
+static int dev_release(struct inode *inod, struct file *filep){
+	if (!hmac_gen_device) {
+		printk(KERN_ERR "HMACGEN device is NULL\n");
+		return -EINVAL;
+	}
+	devm_kfree(hmac_gen_device, filep->private_data);
+	printk(KERN_INFO "KERN_ALERT device closed\n");
+	return 0;
 }
 
-static long hmac_gen_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+static long hmac_gen_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 {
 	int ret = -EINVAL;
 	char key[KEY_SIZE];
@@ -93,7 +114,7 @@ static long hmac_gen_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 				ret = -EINVAL;
 				break;
 			}
-			ret = hmac_gen_set_key(key, klen);
+			ret = hmac_gen_set_key(filep->private_data, key, klen);
 			break;
 		case IOCTL_SET_ALGO:
 			if (copy_from_user(&algo, (int *)arg, sizeof(algo))) {
@@ -101,7 +122,7 @@ static long hmac_gen_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 				ret = -ENOMEM;
 				break;
 			}
-			ret = hmac_gen_set_algo(algo, hmacgen_data);
+			ret = hmac_gen_set_algo(filep->private_data, algo);
 			break;
 		case IOCTL_SET_FILEPATH:
 			if (copy_from_user(path, (char *)arg, sizeof(path))) {
@@ -109,7 +130,7 @@ static long hmac_gen_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 				ret = -ENOMEM;
 				break;
 			}
-			ret = hmac_gen_set_filepath(path);
+			ret = hmac_gen_set_filepath(filep->private_data, path);
 			break;
 	}
 	mutex_unlock(&hmac_ioctl_lock);
@@ -118,22 +139,21 @@ static long hmac_gen_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
 static struct file_operations fops=
 {
-        .read=dev_read,
-        .write=dev_write,
-        .open=dev_open,
-        .release=dev_release,
-        .unlocked_ioctl=hmac_gen_ioctl,
+	.read=dev_read,
+	.write=dev_write,
+	.open=dev_open,
+	.release=dev_release,
+	.unlocked_ioctl=hmac_gen_ioctl,
 };
 
 static int __init hmac_gen_init(void)
 {
-	int err;
+	int err = 0;
 	printk(KERN_INFO "Entering HMAC gen\n");
 
 	printk(KERN_INFO "Calling register dev\n");
 	major_num = register_chrdev(0, DEVICE_NAME, &fops);
 	if (major_num < 0 ){
-		kfree(hmacgen_data);
 		printk(KERN_ALERT "device registration failed. %d\n", major_num);
 	}
 	printk(KERN_INFO "Device %s registration success with major number %d\n",DEVICE_NAME, major_num);
@@ -153,19 +173,6 @@ static int __init hmac_gen_init(void)
 		goto error;
 	}
 	printk(KERN_INFO "hmac_gen: device class created successfully \n");
-
-	hmacgen_data = devm_kzalloc(hmac_gen_device, hmacgen_data_size, GFP_KERNEL);
-	if (!hmacgen_data) {
-		printk(KERN_ERR "Failed to allocate memory for hmac gen data\n");
-		err = -ENOMEM;
-		goto error;
-	}
-
-	err = hmac_gen_crypto_module_init(hmac_gen_device);
-	if (err) {
-		printk(KERN_ERR "Failed to initialize hmac gen crypto module\n");
-		goto error;
-	}
 
 	return err;
 error:
