@@ -19,7 +19,7 @@
 
 #include "hmac_gen_ioctl.h"
 #define IsNullOrEmptyString(str) (!(str) || !(*str))
-int hmac_fd;
+int hmac_fd = -1;
 static int olen = 0;
 static int hmacgen_read_hash(void);;
 static int hmacgen_driver_init(char *hmacgen_device);
@@ -66,6 +66,9 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 cleanup:
+	if (hmac_fd > 0) {
+		close(hmac_fd);
+	}
 	return ret;
 }
 
@@ -130,6 +133,7 @@ static int hmacgen_set_filepath(char *filepath)
 {
 	int ret = -1;
 	struct stat file_stats;
+	char file_path[HMAC_MAX_FILEPATH_LEN] = {0};
 
 	if(IsNullOrEmptyString(filepath)) {
 		fprintf(stderr, "Null or empty file path\n");
@@ -149,7 +153,8 @@ static int hmacgen_set_filepath(char *filepath)
 		fprintf(stderr, "File size is zero\n");
 		return ret;
 	}
-	ret = ioctl(hmac_fd, IOCTL_SET_FILEPATH, filepath);
+	strncpy(file_path, filepath, strlen(filepath));
+	ret = ioctl(hmac_fd, IOCTL_SET_FILEPATH, file_path);
 	if (ret < 0) {
 		fprintf(stderr, "Error setting the file path to hmac_gen driver\n");
 	}

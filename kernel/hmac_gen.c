@@ -26,38 +26,16 @@
 #include <linux/scatterlist.h>
 #include <crypto/skcipher.h>
 
-#include "../include/hmac_gen_ioctl.h"
 #include "../include/hmac_gen.h"
 
-#define VECTOR_TYPE_SIZE 20
 #define DIGEST_SIZE 512
 #define TEXT_SIZE (64 * (1024))
 #define MAX_FILE_SIZE 256000000 //256 MB
-
-typedef struct crypto_vector {
-	unsigned int algo;
-	unsigned int mask;
-	char vector_type[VECTOR_TYPE_SIZE];
-	int mode; //Encrypt=1 /Decrypt=2
-	int count;
-	int klen;
-	int data_tot_len;
-	int iv_len;
-	int rlen;
-	int olen;
-	unsigned char filepath[1024];
-	unsigned char key[KEY_SIZE];
-	unsigned char *iv;
-	unsigned char *hash_input;
-	unsigned char *hash_output;
-	struct scatterlist *sgin;
-} crypto_vector_t;
 
 struct ft_crypt_result {
 	struct completion completion;
 	int err;
 };
-crypto_vector_t *crypto_data;
 static DEFINE_MUTEX(hmacgen_crypto_lock);
 
 static void ft_crypt_complete(struct crypto_async_request *req, int err)
@@ -143,7 +121,7 @@ out:
 	return ret;
 }
 
-int hmac_gen_set_key(unsigned char text_key[KEY_SIZE], int klen)
+int hmac_gen_set_key(crypto_vector_t *crypto_data, unsigned char text_key[KEY_SIZE], int klen)
 {
 
 	mutex_lock(&hmacgen_crypto_lock);
@@ -155,7 +133,7 @@ int hmac_gen_set_key(unsigned char text_key[KEY_SIZE], int klen)
 	return 0;
 }
 
-int hmac_gen_set_algo(int algo, hmacgen_out_data *hmacgen_data)
+int hmac_gen_set_algo(crypto_vector_t *crypto_data, int algo)
 {
 	int ret = 0;
 
@@ -166,25 +144,23 @@ int hmac_gen_set_algo(int algo, hmacgen_out_data *hmacgen_data)
 		case HMAC_SHA256:
 			strncpy(crypto_data->vector_type, "hmac(sha256)", strlen("hmac(sha256)"));
 			crypto_data->olen = 32;
-			hmacgen_data->olen = 32;
 			break;
 		case HMAC_SHA512:
 			strncpy(crypto_data->vector_type, "hmac(sha512)", strlen("hmac(sha512)"));
 			crypto_data->olen = 64;
-			hmacgen_data->olen = 64;
 			break;
 		default:
 			printk(KERN_ERR "hash algo not supported");
 			ret = -EINVAL;
 			break;
 	}
-
+	printk(KERN_ERR "Vector type from %s is %s\n",__func__, crypto_data->vector_type);
 	mutex_unlock(&hmacgen_crypto_lock);
 
 	return ret;
 }
 
-int hmac_gen_set_filepath(unsigned char path[])
+int hmac_gen_set_filepath(crypto_vector_t *crypto_data, unsigned char path[])
 {
 	mutex_lock(&hmacgen_crypto_lock);
 	strncpy(crypto_data->filepath, path, strlen(path));
@@ -192,7 +168,7 @@ int hmac_gen_set_filepath(unsigned char path[])
 	return 0;
 }
 
-int hmac_gen_hash(hmacgen_out_data *hmacgen_data)
+int hmac_gen_hash(crypto_vector_t *crypto_data)
 {
 	int ret = 0;
 	enum kernel_read_file_id id = READING_MODULE;
@@ -201,6 +177,11 @@ int hmac_gen_hash(hmacgen_out_data *hmacgen_data)
 	size_t msize = INT_MAX;
 	struct path path;
 	struct kstat stat;
+
+	if(!crypto_data) {
+		printk(KERN_ERR "crypto data is NULL\n");
+		return -EINVAL;
+	}
 
 	mutex_lock(&hmacgen_crypto_lock);
 
@@ -221,7 +202,7 @@ int hmac_gen_hash(hmacgen_out_data *hmacgen_data)
 	}
 	ret = kern_path(crypto_data->filepath, 0, &path);
 	if (ret) {
-		printk(KERN_ERR "kernel path error\n");
+		printk(KERN_ERR "kernel path error %s\n",crypto_data->filepath);
 		goto out;
 	}
 
@@ -247,28 +228,18 @@ int hmac_gen_hash(hmacgen_out_data *hmacgen_data)
 
 	crypto_data->hash_input = buf;
 	crypto_data->data_tot_len = size;
-	crypto_data->hash_output = hmacgen_data->hash_output;
-
 	ret = test_hash(crypto_data);
 	if (ret) {
 		printk(KERN_ERR "test_hash (%s) err %d\n", crypto_data->vector_type, ret);
 		goto out;
 	}
-	hmacgen_data->hash_output[hmacgen_data->olen] = '\0';
+	crypto_data->hash_output[crypto_data->olen] = '\0';
 
 out:
 	if (ret) {
-		memset(hmacgen_data, 0, sizeof(*hmacgen_data));
+		memset(crypto_data->hash_output, 0, sizeof(*crypto_data->hash_output));
 	}
 	vfree(buf);
 	mutex_unlock(&hmacgen_crypto_lock);
 	return ret;
-}
-
-int hmac_gen_crypto_module_init(struct device* hmac_gen_device)
-{
-	crypto_data = devm_kzalloc(hmac_gen_device, sizeof (*crypto_data), GFP_KERNEL);
-	if (!crypto_data)
-		return -ENOMEM;
-	return 0;
 }
