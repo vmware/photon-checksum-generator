@@ -143,11 +143,11 @@ int hmac_gen_set_algo(crypto_vector_t *crypto_data, int algo)
 	crypto_data->mask = 0;
 	switch (algo) {
 		case HMAC_SHA256:
-			strncpy(crypto_data->vector_type, "hmac(sha256)", strlen("hmac(sha256)"));
+			strncpy(crypto_data->vector_type, "hmac(sha256)", VECTOR_TYPE_SIZE);
 			crypto_data->olen = 32;
 			break;
 		case HMAC_SHA512:
-			strncpy(crypto_data->vector_type, "hmac(sha512)", strlen("hmac(sha512)"));
+			strncpy(crypto_data->vector_type, "hmac(sha512)", VECTOR_TYPE_SIZE);
 			crypto_data->olen = 64;
 			break;
 		default:
@@ -155,7 +155,7 @@ int hmac_gen_set_algo(crypto_vector_t *crypto_data, int algo)
 			ret = -EINVAL;
 			break;
 	}
-	printk(KERN_ERR "Vector type from %s is %s\n",__func__, crypto_data->vector_type);
+	printk(KERN_INFO "Vector type from %s is %s\n",__func__, crypto_data->vector_type);
 	mutex_unlock(&hmacgen_crypto_lock);
 
 	return ret;
@@ -164,7 +164,7 @@ int hmac_gen_set_algo(crypto_vector_t *crypto_data, int algo)
 int hmac_gen_set_filepath(crypto_vector_t *crypto_data, unsigned char path[])
 {
 	mutex_lock(&hmacgen_crypto_lock);
-	strncpy(crypto_data->filepath, path, strlen(path));
+	strncpy(crypto_data->filepath, path, HMAC_MAX_FILEPATH_LEN);
 	mutex_unlock(&hmacgen_crypto_lock);
 	return 0;
 }
@@ -173,7 +173,7 @@ int hmac_gen_hash(crypto_vector_t *crypto_data)
 {
 	int ret = 0;
 	enum kernel_read_file_id id = READING_MODULE;
-	void *buf;
+	void *buf = NULL;
 	loff_t size;
 	size_t msize = INT_MAX;
 	struct path path;
@@ -240,7 +240,9 @@ out:
 	if (ret) {
 		memset(crypto_data->hash_output, 0, sizeof(*crypto_data->hash_output));
 	}
-	vfree(buf);
+	if (buf != NULL) {
+		vfree(buf);
+	}
 	mutex_unlock(&hmacgen_crypto_lock);
 	return ret;
 }
