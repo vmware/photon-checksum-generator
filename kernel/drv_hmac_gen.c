@@ -55,13 +55,14 @@ static int dev_open(struct inode *inod, struct file *filep)
 static ssize_t dev_read(struct file *filep, char *buf, size_t len, loff_t *off)
 {
 	int ret = -EINVAL;
+	crypto_vector_t *crypto_data = NULL;
 
 	if (!filep || !filep->private_data || !buf || !off) {
 		printk(KERN_ERR "Read device called with null buffer or null file pointers!!\n");
 		return ret;
 	}
 	printk(KERN_INFO "Read device %s called", DEVICE_NAME);
-	crypto_vector_t *crypto_data = (crypto_vector_t *)filep->private_data;
+	crypto_data = (crypto_vector_t *)filep->private_data;
 	ret = hmac_gen_hash(filep->private_data);
 	if (ret) {
 		printk(KERN_ERR "Failed to generate hmac sha with error %d\n", ret);
