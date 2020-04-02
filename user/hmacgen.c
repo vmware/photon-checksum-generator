@@ -122,7 +122,10 @@ static int hmacgen_set_key(char *key)
 		fprintf(stderr, "Null or empty key\n");
 		return ret;
 	}
-
+    if (strlen(key) > KEY_SIZE) {
+        fprintf(stderr, "Key Size is greater than max key size\n");
+        return ret;
+    }
 	ret = ioctl(hmac_fd, IOCTL_SET_KEY, key);
 	if (ret < 0) {
 		fprintf(stderr, "Error setting the key to hmac_gen driver\n");
