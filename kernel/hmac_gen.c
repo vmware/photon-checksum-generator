@@ -210,21 +210,21 @@ int hmac_gen_hash(crypto_vector_t *crypto_data)
 	ret = vfs_getattr(&path, &stat, STATX_SIZE, 0);
 	if (ret) {
 		printk(KERN_ERR "kernel Read file stats Error\n");
-		goto out;
+		goto out1;
 	}
 	printk(KERN_INFO "File Size = %lld\n", stat.size);
 
 	if (stat.size > MAX_FILE_SIZE) {
 		printk(KERN_ERR "File size exceeded\n");
 		ret = -EFBIG;
-		goto out;
+		goto out1;
 	}
 
 	ret = kernel_read_file_from_path(crypto_data->filepath, &buf, &size,
 					msize, id);
 	if (ret) {
 		printk(KERN_ERR "Loading %s failed with error %d\n", crypto_data->filepath, ret);
-		goto out;
+		goto out1;
 	}
 
 	crypto_data->hash_input = buf;
@@ -232,10 +232,12 @@ int hmac_gen_hash(crypto_vector_t *crypto_data)
 	ret = test_hash(crypto_data);
 	if (ret) {
 		printk(KERN_ERR "test_hash (%s) err %d\n", crypto_data->vector_type, ret);
-		goto out;
+		goto out1;
 	}
 	crypto_data->hash_output[crypto_data->olen] = '\0';
 
+out1:
+	path_put(&path);
 out:
 	if (ret) {
 		memset(crypto_data->hash_output, 0, sizeof(*crypto_data->hash_output));
