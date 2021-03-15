@@ -186,7 +186,6 @@ static void __exit hmac_gen_exit(void)
 {
 	printk(KERN_INFO "Leaving HMAC gen\n");
 	device_destroy(hmac_gen_class, MKDEV(major_num, 0));
-	class_unregister(hmac_gen_class);
 	class_destroy(hmac_gen_class);
 	unregister_chrdev(major_num, DEVICE_NAME);
 }
