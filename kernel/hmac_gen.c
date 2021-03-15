@@ -57,14 +57,65 @@ static void ft_result_init(struct ft_crypt_result *ft)
 	init_completion(&ft->completion);
 }
 
+static int setup_sg_table(struct sg_table *sgt, struct scatterlist *sgl,
+			  void *buf, int buf_len)
+{
+	struct scatterlist *sg;
+	unsigned int chunk_cnt = 1;
+	const bool is_vmalloc = is_vmalloc_addr(buf);
+	unsigned int off = offset_in_page(buf);
+	unsigned int chunk_len = PAGE_ALIGN(off + buf_len);
+	int i;
+	int ret = 0;
+
+	if (is_vmalloc) {
+		chunk_cnt = chunk_len >> PAGE_SHIFT;
+		chunk_len = PAGE_SIZE;
+	}
+
+	if (chunk_cnt > 1) {
+		ret = sg_alloc_table(sgt, chunk_cnt, GFP_NOFS);
+		if (ret) {
+			printk(KERN_ERR "Allocate sg table failed with err %d\n", ret);
+			return ret;
+		}
+	} else {
+		sg_init_table(sgl, 1);
+		sgt->sgl = sgl;
+		sgt->nents = sgt->orig_nents = 1;
+	}
+
+	for_each_sg(sgt->sgl, sg, sgt->orig_nents, i) {
+		struct page *page;
+		unsigned int len = min(chunk_len - off, buf_len);
+		if (is_vmalloc)
+			page = vmalloc_to_page(buf);
+		else
+			page = virt_to_page(buf);
+		sg_set_page(sg, page, len, off);
+		off = 0;
+		buf += len;
+		buf_len -= len;
+	}
+	return ret;
+}
+
+static void teardown_sg_table(struct sg_table *sgt)
+{
+	if (sgt->orig_nents > 1)
+		sg_free_table(sgt);
+}
+
 int test_hash(crypto_vector_t *crypto_data)
 {
 	struct crypto_ahash *tfm = NULL;
 	struct ahash_request *req = NULL;
 	struct ft_crypt_result ft_result;
-	struct scatterlist sgin;
 	const char *algo;
 	int ret = -ENOMEM;
+	struct sg_table sgt;
+	struct scatterlist sgl;
+
 
 	tfm = crypto_alloc_ahash(crypto_data->vector_type, crypto_data->algo, crypto_data-> mask);
 	if (IS_ERR(tfm)) {
@@ -104,9 +155,13 @@ int test_hash(crypto_vector_t *crypto_data)
 				CRYPTO_TFM_REQ_MAY_BACKLOG,
 				ft_crypt_complete, &ft_result);
 
-	sg_init_one(&sgin, crypto_data->hash_input, crypto_data->data_tot_len);
+	ret = setup_sg_table(&sgt, &sgl, crypto_data->hash_input, crypto_data->data_tot_len);
+	if (ret) {
+		printk(KERN_ERR "Setup sg table failed with err %d\n", ret);
+		return ret;
+	}
 
-	ahash_request_set_crypt(req, &sgin, crypto_data->hash_output, crypto_data->data_tot_len);
+	ahash_request_set_crypt(req, sgt.sgl, crypto_data->hash_output, crypto_data->data_tot_len);
 
 	ret = crypto_ahash_digest(req);
 	if (ret == -EINPROGRESS || ret == -EBUSY) {
@@ -118,6 +173,7 @@ int test_hash(crypto_vector_t *crypto_data)
 	/*crypto_ahash_update() */
 	ahash_request_free(req);
 out:
+	teardown_sg_table(&sgt);
 	crypto_free_ahash(tfm);
 	return ret;
 }
